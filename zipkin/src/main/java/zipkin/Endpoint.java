@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 The OpenZipkin Authors
+ * Copyright 2015-2017 The OpenZipkin Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,6 +13,7 @@
  */
 package zipkin;
 
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Locale;
 import zipkin.internal.JsonCodec;
@@ -138,10 +139,39 @@ public final class Endpoint {
       return this;
     }
 
-    /** @see Endpoint#ipv6 */
+    /**
+     * When not null, this sets the {@link Endpoint#ipv6}, unless the input is an <a
+     * href="https://tools.ietf.org/html/rfc4291#section-2.5.5.2">IPv4-Compatible or IPv4-Mapped
+     * Embedded IPv6 Address</a>. In such case, {@link #ipv4(int)} is called with the embedded
+     * address.
+     *
+     * @see Endpoint#ipv6
+     */
     public Builder ipv6(byte[] ipv6) {
-      if (ipv6 != null) {
-        checkArgument(ipv6.length == 16, "ipv6 addresses are 16 bytes: " + ipv6.length);
+      if (ipv6 == null) return this;
+      checkArgument(ipv6.length == 16, "ipv6 addresses are 16 bytes: " + ipv6.length);
+      boolean ipv4Mapped = true; // if it starts with 80 unset bits, then 16 set bits
+      boolean ipv4Compat = true; // if it starts with 96 unset bits
+      for (int i = 0; i < 16; i++) {
+        byte val = ipv6[i];
+        if (i == 10 || i == 11) { // check when in mapped bits
+          if (val == (byte) 0xff) {
+            ipv4Compat = false;
+          } else {
+            ipv4Mapped = false;
+          }
+        } else if (i == 15) { // check LSB for possible localhost
+          // don't mistake localhost for an embedded compat address
+          if (val == 1) ipv4Compat = false;
+        }
+        if (val == 0) continue;
+        if (i < 12) ipv4Compat = false;
+        if (i < 10) ipv4Mapped = false;
+      }
+      if (ipv4Mapped || ipv4Compat) {
+        ByteBuffer buffer = ByteBuffer.wrap(ipv6, 12, 4);
+        return ipv4(buffer.getInt());
+      } else {
         this.ipv6 = ipv6;
       }
       return this;
